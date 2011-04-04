@@ -13,16 +13,21 @@ struct start_args {
 	struct sigevent *sev;
 };
 
-static void sighandler(int sig, siginfo_t *si, void *ctx)
+void __sigtimer_handler(pthread_t self)
 {
 	int st;
-	pthread_t self = __pthread_self();
 	void (*notify)(union sigval) = (void (*)(union sigval))self->start;
 	union sigval val = { .sival_ptr = self->start_arg };
 
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &st);
 	notify(val);
 	pthread_setcancelstate(st, 0);
+}
+
+static void cleanup(void *p)
+{
+	pthread_t self = p;
+	__syscall(SYS_timer_delete, self->result);
 }
 
 static void *start(void *arg)
@@ -36,10 +41,12 @@ static void *start(void *arg)
 	self->start_arg = args->sev->sigev_value.sival_ptr;
 	self->result = (void *)-1;
 
+	pthread_cleanup_push(cleanup, self);
 	pthread_barrier_wait(&args->b);
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, 0);
 	/* Loop on async-signal-safe cancellation point */
-	for (;;) sleep(1);
+	for (;;) sleep(1000000000);
+	pthread_cleanup_pop(0);
 	return 0;
 }
 
@@ -72,7 +79,6 @@ int timer_create(clockid_t clk, struct sigevent *evp, timer_t *res)
 		*res = (void *)(2*timerid+1);
 		break;
 	case SIGEV_THREAD:
-		if (!libc.sigtimer) libc.sigtimer = sighandler;
 		if (sev.sigev_notify_attributes)
 			attr = *sev.sigev_notify_attributes;
 		else

@@ -141,6 +141,7 @@ void swab(const void *, void *, ssize_t);
 long gethostid(void);
 int nice(int);
 void sync(void);
+int getdtablesize(void);
 #endif
 
 #ifdef _GNU_SOURCE
@@ -154,6 +155,8 @@ int sethostname(const char *, size_t);
 int usleep(unsigned);
 unsigned ualarm(unsigned, unsigned);
 int setgroups(int, const gid_t []);
+int setresuid(uid_t, uid_t, uid_t);
+int setresgid(gid_t, gid_t, gid_t);
 #endif
 
 #define _XOPEN_VERSION          700

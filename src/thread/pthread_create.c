@@ -1,5 +1,11 @@
 #include "pthread_impl.h"
 
+static void dummy_1(pthread_t self)
+{
+}
+weak_alias(dummy_1, __pthread_tsd_run_dtors);
+weak_alias(dummy_1, __sigtimer_handler);
+
 #ifdef __pthread_unwind_next
 #undef __pthread_unwind_next
 #define __pthread_unwind_next __pthread_unwind_next_3
@@ -7,7 +13,6 @@
 
 void __pthread_unwind_next(struct __ptcb *cb)
 {
-	int i, j, not_finished;
 	pthread_t self;
 
 	if (cb->__next) longjmp((void *)cb->__next->__jb, 1);
@@ -16,18 +21,7 @@ void __pthread_unwind_next(struct __ptcb *cb)
 
 	LOCK(&self->exitlock);
 
-	not_finished = self->tsd_used;
-	for (j=0; not_finished && j<PTHREAD_DESTRUCTOR_ITERATIONS; j++) {
-		not_finished = 0;
-		for (i=0; i<PTHREAD_KEYS_MAX; i++) {
-			if (self->tsd[i] && libc.tsd_keys[i]) {
-				void *tmp = self->tsd[i];
-				self->tsd[i] = 0;
-				libc.tsd_keys[i](tmp);
-				not_finished = 1;
-			}
-		}
-	}
+	__pthread_tsd_run_dtors(self);
 
 	/* Mark this thread dead before decrementing count */
 	self->dead = 1;
@@ -54,13 +48,9 @@ static void docancel(struct pthread *self)
 static void cancel_handler(int sig, siginfo_t *si, void *ctx)
 {
 	struct pthread *self = __pthread_self();
-	if (!self->cancel) {
-		if (si->si_code == SI_TIMER && libc.sigtimer)
-			libc.sigtimer(sig, si, ctx);
-		return;
-	}
-	if (self->canceldisable) return;
-	if (self->cancelasync || (self->cancelpoint==1 && PC_AT_SYS(ctx)))
+	if (si->si_code == SI_TIMER) __sigtimer_handler(self);
+	if (self->cancel && !self->canceldisable &&
+	    (self->cancelasync || (self->cancelpoint==1 && PC_AT_SYS(ctx))))
 		docancel(self);
 }
 
@@ -90,13 +80,12 @@ static void rsyscall_handler(int sig, siginfo_t *si, void *ctx)
 {
 	struct pthread *self = __pthread_self();
 
-	if (si->si_code > 0 || si->si_pid != self->pid ||
-		rs.cnt == libc.threads_minus_1) return;
+	if (!rs.hold || rs.cnt == libc.threads_minus_1) return;
 
 	/* Threads which have already decremented themselves from the
 	 * thread count must not increment rs.cnt or otherwise act. */
 	if (self->dead) {
-		__wait(&rs.hold, 0, 1, 1);
+		sigfillset(&((ucontext_t *)ctx)->uc_sigmask);
 		return;
 	}
 
@@ -128,9 +117,9 @@ static int rsyscall(int nr, long a, long b, long c, long d, long e, long f)
 	rs.arg[0] = a; rs.arg[1] = b;
 	rs.arg[2] = c; rs.arg[3] = d;
 	rs.arg[4] = d; rs.arg[5] = f;
-	rs.hold = 1;
 	rs.err = 0;
 	rs.cnt = 0;
+	rs.hold = 1;
 
 	/* Dispatch signals until all threads respond */
 	for (i=libc.threads_minus_1; i; i--)
@@ -162,13 +151,18 @@ static void init_threads()
 	libc.lockfile = __lockfile;
 	libc.cancelpt = cancelpt;
 	libc.rsyscall = rsyscall;
-	sa.sa_sigaction = cancel_handler;
-	__libc_sigaction(SIGCANCEL, &sa, 0);
-	sigaddset(&sa.sa_mask, SIGSYSCALL);
-	sigaddset(&sa.sa_mask, SIGCANCEL);
+
+	sigfillset(&sa.sa_mask);
 	sa.sa_sigaction = rsyscall_handler;
 	__libc_sigaction(SIGSYSCALL, &sa, 0);
-	sigprocmask(SIG_UNBLOCK, &sa.sa_mask, 0);
+
+	sigemptyset(&sa.sa_mask);
+	sa.sa_sigaction = cancel_handler;
+	__libc_sigaction(SIGCANCEL, &sa, 0);
+
+	sigaddset(&sa.sa_mask, SIGSYSCALL);
+	sigaddset(&sa.sa_mask, SIGCANCEL);
+	__libc_sigprocmask(SIG_UNBLOCK, &sa.sa_mask, 0);
 }
 
 static int start(void *p)
@@ -201,7 +195,7 @@ int pthread_create(pthread_t *res, const pthread_attr_t *attr, void *(*entry)(vo
 	unsigned char *map, *stack, *tsd;
 	static const pthread_attr_t default_attr;
 
-	if (!self) return errno = ENOSYS;
+	if (!self) return ENOSYS;
 	if (!init && ++init) init_threads();
 
 	if (!attr) attr = &default_attr;
