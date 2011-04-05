@@ -5,7 +5,7 @@
 #define IP_ROUTER_ALERT    5
 #define IP_RECVOPTS        6
 #define IP_RETOPTS         7
-//#define IP_PKTINFO         8
+#define IP_PKTINFO         8
 #define IP_PKTOPTIONS      9
 #define IP_PMTUDISC        10
 #define IP_MTU_DISCOVER    10
@@ -69,6 +69,18 @@ struct in_pktinfo
 	int ipi_ifindex;
 	struct in_addr ipi_spec_dst;
 	struct in_addr ipi_addr;
+};
+
+struct in6_pktinfo
+{
+	struct in6_addr ipi6_addr;
+	unsigned ipi6_ifindex;
+};
+
+struct in6_mutinfo
+{
+	struct sockaddr_in6 ip6m_addr;
+	uint32_t ip6m_mtu;
 };
 
 #define IPV6_ADDRFORM           1
